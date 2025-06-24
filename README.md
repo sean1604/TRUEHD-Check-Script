@@ -7,5 +7,7 @@ My audio setup does not play nicely with TRUEHD 7.1 audio codecs and I wanted a 
 
 Requirements;
 Python 3
+
 The requests module:
+
 Install it if needed with: pip install requests
