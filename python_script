@@ -1,0 +1,112 @@
+import requests
+import csv
+from datetime import datetime
+
+# ==== CONFIG ====
+TAUTULLI_URL = 'http://localhost:8181' # replace with your local Tautulli host/IP
+API_KEY = 'tautulli API key' # replace with your tautulli web API
+MOVIE_LIBRARY_NAME = 'Films' # replace with your plex movie library name (note this is case sensitive)
+CSV_OUTPUT_FILE = f'movies_with_7.1_but_no_5.1_{datetime.today().strftime("%d_%m_%y")}_v3.csv' #you can change the name of the output file here to whatever you want
+# ================================
+
+def get_json_response(url, params):
+    try:
+        res = requests.get(url, params=params)
+        print(f"🔍 Requested URL: {res.url}")
+        res.raise_for_status()
+        return res.json()['response']
+    except Exception as e:
+        raise SystemExit(f"❌ Error: {e}")
+
+def get_library_section_id():
+    url = f'{TAUTULLI_URL}/api/v2'
+    params = {'apikey': API_KEY, 'cmd': 'get_libraries'}
+    response = get_json_response(url, params)
+    for section in response['data']:
+        if section['section_name'].lower() == MOVIE_LIBRARY_NAME.lower():
+            return section['section_id']
+    raise ValueError(f"Library '{MOVIE_LIBRARY_NAME}' not found.")
+
+def get_movie_list(section_id):
+    url = f'{TAUTULLI_URL}/api/v2'
+    params = {
+    'apikey': API_KEY,
+    'cmd': 'get_library_media_info',
+    'section_id': section_id,
+    'length': 10000  # Ensure you get all entries
+    }
+    response = get_json_response(url, params)
+    movie_list = response['data'].get('data', [])
+    return movie_list if isinstance(movie_list, list) else []
+
+def get_truehd_8ch_and_all_channels(rating_key):
+    url = f'{TAUTULLI_URL}/api/v2'
+    params = {'apikey': API_KEY, 'cmd': 'get_metadata', 'rating_key': rating_key}
+    response = get_json_response(url, params)
+
+    truehd_streams = []
+    all_channels = set()
+
+    for media in response['data'].get('media_info', []):
+        for part in media.get('parts', []):
+            for stream in part.get('streams', []):
+                if stream.get('type') == "2":  # Audio stream
+                    ch = stream.get('audio_channels') or stream.get('channels')
+                    codec = stream.get('audio_codec', '').lower()
+                    lang = stream.get('audio_language') or 'Unknown'
+
+                    try:
+                        ch_int = int(ch)
+                        all_channels.add(ch_int)
+                        if ch_int == 8 and 'truehd' in codec:
+                            truehd_streams.append(f"{ch_int}ch TRUEHD ({lang})")
+                    except (ValueError, TypeError):
+                        continue
+    return truehd_streams, all_channels
+
+
+def main():
+    try:
+        section_id = get_library_section_id()
+        movies = get_movie_list(section_id)
+
+        results = []
+
+        for movie in movies:
+            title = movie.get('title', 'Unknown Title')
+            rating_key = movie.get('rating_key')
+            file_path = movie.get('file', 'N/A')
+
+            if not rating_key:
+                continue
+
+            try:
+                truehd_streams, all_channels = get_truehd_8ch_and_all_channels(rating_key)
+                print(f"🎬 {title:<50} → TRUEHD 8ch: {truehd_streams} | All Channels: {sorted(all_channels)}")
+
+                if truehd_streams and 6 not in all_channels:
+                    results.append({
+                        'title': title,
+                        'channels': ", ".join(truehd_streams),
+                        'path': file_path
+                    })
+            except Exception as e:
+                print(f"⚠️ Error checking '{title}': {e}")
+
+        print(f"\n{'Title':<50}  {'Channels':<10}  File Path")
+        print("-" * 100)
+        for r in results:
+            print(f"{r['title']:<50}  {r['channels']:<10}  {r['path']}")
+
+        with open(CSV_OUTPUT_FILE, "w", newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=["title", "channels", "path"])
+            writer.writeheader()
+            writer.writerows(results)
+
+        print(f"\n✅ Exported {len(results)} result(s) to '{CSV_OUTPUT_FILE}'")
+
+    except Exception as err:
+        print(f"❌ Fatal error: {err}")
+
+if __name__ == "__main__":
+    main()
